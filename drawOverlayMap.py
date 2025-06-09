@@ -5,7 +5,8 @@ from modules.data_loader import (
     fetch_regioes,
     fetch_municipios,
     fetch_geojson_por_regiao,
-    fetch_geojson_por_municipio
+    fetch_geojson_por_municipio,
+    fetch_geojson_boundary
 )
 from streamlit.components.v1 import html
 import json
@@ -38,16 +39,26 @@ municipio = st.selectbox(
 geojson = None
 if st.button("Gerar Mapa"):
     if municipio == "(toda a região)":
-        # chama /geojson?regiao=regiao
         try:
             geojson = fetch_geojson_por_regiao(regiao)
+            # Busca os limites de todos os municípios da região
+            boundaries = []
+            for m in municipios:
+                try:
+                    boundary = fetch_geojson_boundary(m)
+                    if boundary and boundary.get("features"):
+                        boundaries.extend(boundary["features"])
+                except:
+                    continue
+            boundary_geojson = {"type": "FeatureCollection", "features": boundaries} if boundaries else None
         except Exception as e:
             st.error(f"Não foi possível carregar GeoJSON da região '{regiao}':\n{e}")
             st.stop()
     else:
-        # chama /geojson?municipio=municipio
         try:
             geojson = fetch_geojson_por_municipio(municipio)
+            # Busca o limite do município específico
+            boundary_geojson = fetch_geojson_boundary(municipio)
         except Exception as e:
             st.error(f"Não foi possível carregar GeoJSON do município '{municipio}':\n{e}")
             st.stop()
@@ -70,6 +81,7 @@ if st.button("Gerar Mapa"):
     }
 
     # 7) Monta o HTML/JavaScript completo com controles interativos
+    boundary_str = json.dumps(boundary_geojson) if boundary_geojson and boundary_geojson.get("features") else "null"
     html_code = f"""
     <!DOCTYPE html>
     <html>
@@ -201,9 +213,11 @@ if st.button("Gerar Mapa"):
         <script>
           const CORES = {json.dumps(CORES)};
           const geojson = {geojson_str};
-          let map, pixiOverlay;
+          const boundaryGeojson = {boundary_str};
+          let map, pixiOverlay, boundaryLayer;
           const categoryContainers = {{}};
           const categoryBounds = {{}};
+
 
           // Função para calcular o centro do mapa
           function getMapCenter(geojson) {{
@@ -231,7 +245,7 @@ if st.button("Gerar Mapa"):
             return coords;
           }}
 
-          // Função principal para inicializar o mapa
+           // Função principal para inicializar o mapa
           function initMap() {{
             const center = getMapCenter(geojson);
             map = L.map('map').setView(center, 10);
@@ -239,6 +253,20 @@ if st.button("Gerar Mapa"):
             L.tileLayer("https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png", {{
               attribution: "© OpenStreetMap"
             }}).addTo(map);
+
+            // Adiciona limites municipais se existirem
+            if (boundaryGeojson && boundaryGeojson.features && boundaryGeojson.features.length > 0) {{
+              boundaryLayer = L.geoJSON(boundaryGeojson, {{
+                style: {{
+                  color: "#003366",
+                  weight: 2,
+                  opacity: 0.8,
+                  fill: false,
+                  dashArray: "5, 5"
+                }},
+                interactive: false
+              }}).addTo(map);
+            }}
 
             // Criar container principal
             const mainContainer = new PIXI.Container();
@@ -394,9 +422,6 @@ if st.button("Gerar Mapa"):
             }});
           }});
           
-          // Controles globais
-          document.getElementById('show-all').addEventListener('click', showAllLayers);
-          document.getElementById('hide-all').addEventListener('click', hideAllLayers);
         </script>
       </body>
     </html>
